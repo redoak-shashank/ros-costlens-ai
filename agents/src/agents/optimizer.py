@@ -180,10 +180,10 @@ def optimizer_node(state: BillingState) -> dict:
                 f"Found {len(all_recommendations)} EC2 optimization opportunities "
                 f"with ~${total_savings:.2f}/mo potential savings "
                 f"({by_type})"
-            )
+        )
         else:
             summary = "No EC2 optimization opportunities found right now."
-        logger.info(summary)
+            logger.info(summary)
 
         return {
             "recommendations": all_recommendations,
