@@ -1,0 +1,24 @@
+###############################################################################
+# Example Configuration — copy to terraform.tfvars and fill in values
+###############################################################################
+
+# Deployment phase: 1 = full system, 2 = + monitoring
+deploy_phase = 1
+
+aws_region   = "us-east-1"
+project_name = "agentcore-billing"
+environment  = "dev"
+
+# Budget
+monthly_budget      = 1000
+alert_threshold_pct = 80
+
+# Slack (set after creating your Slack app)
+slack_channel_id = ""  # Right-click channel → "View channel details" → Channel ID
+
+# CUR
+cur_s3_prefix        = "cur-reports"
+cur_retention_months = 13
+
+# Bedrock
+bedrock_model_id = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"

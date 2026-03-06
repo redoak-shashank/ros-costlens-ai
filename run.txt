@@ -1,0 +1,33 @@
+set -euo pipefail
+
+# Stabilize Terraform provider/plugin temp files on macOS
+export TMPDIR=/tmp/tf-tmp
+mkdir -p "$TMPDIR"
+
+cd /Users/shashank/Desktop/agentcore-billing/agents
+rm -rf /tmp/agent_build && mkdir -p /tmp/agent_build
+cp -r deployment_package/* /tmp/agent_build/
+cp app.py /tmp/agent_build/
+cp -r src /tmp/agent_build/
+cd /tmp/agent_build && rm -f /tmp/billing-agents.zip
+zip -r /tmp/billing-agents.zip . -x '*.pyc' '__pycache__/*' '*.dist-info/*' > /dev/null 2>&1
+
+echo "Artifact details:"
+ls -lh /tmp/billing-agents.zip
+shasum -a 256 /tmp/billing-agents.zip
+
+aws s3 cp /tmp/billing-agents.zip \
+  s3://agentcore-billing-dev-agent-code-088130860316/agent-code/billing-agents.zip \
+  --region us-east-1 2>&1 | tail -1
+
+cp /tmp/billing-agents.zip /Users/shashank/Desktop/agentcore-billing/terraform/modules/agentcore/placeholder.zip
+
+cd /Users/shashank/Desktop/agentcore-billing/terraform
+if [ ! -d ".terraform/providers" ] || [ ! -f ".terraform.lock.hcl" ]; then
+  echo "Terraform init (guard)..."
+  TMPDIR="$TMPDIR" terraform init -upgrade > /tmp/tf_init.log 2>&1
+  tail -5 /tmp/tf_init.log
+fi
+terraform taint 'module.agentcore.aws_bedrockagentcore_agent_runtime.billing'
+terraform taint 'module.agentcore.aws_bedrockagentcore_agent_runtime_endpoint.billing'
+TMPDIR="$TMPDIR" terraform apply -auto-approve 2>&1 | tail -3
