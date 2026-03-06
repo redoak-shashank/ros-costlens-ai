@@ -18,19 +18,30 @@ import streamlit as st
 
 def _get_aws_config() -> dict:
     """Get AWS credentials and region from st.secrets or env vars."""
+    def _norm(v):
+        if v is None:
+            return None
+        if isinstance(v, str):
+            v = v.strip()
+            return v or None
+        return v
+
     try:
         aws_secrets = st.secrets.get("aws", {})
-        return {
-            "aws_access_key_id": aws_secrets.get(
-                "aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID")
+        cfg = {
+            "aws_access_key_id": _norm(
+                aws_secrets.get("aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID"))
             ),
-            "aws_secret_access_key": aws_secrets.get(
-                "aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY")
+            "aws_secret_access_key": _norm(
+                aws_secrets.get("aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY"))
             ),
-            "region_name": aws_secrets.get(
-                "region", os.environ.get("AWS_REGION", "us-east-1")
+            "aws_session_token": _norm(
+                aws_secrets.get("aws_session_token", os.environ.get("AWS_SESSION_TOKEN"))
             ),
+            "region_name": _norm(aws_secrets.get("region", os.environ.get("AWS_REGION", "us-east-1"))),
         }
+        # Drop empty credential fields so boto3 can use default credential chain
+        return {k: v for k, v in cfg.items() if v is not None}
     except Exception:
         return {"region_name": os.environ.get("AWS_REGION", "us-east-1")}
 
