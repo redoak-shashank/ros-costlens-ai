@@ -25,19 +25,45 @@ def _get_aws_config() -> dict:
             return v or None
         return v
 
+    def _safe_get(mapping, key, default=None):
+        try:
+            return mapping.get(key, default)
+        except Exception:
+            return default
+
     try:
-        aws_secrets = st.secrets.get("aws", {})
+        secrets = st.secrets
+        aws_secrets = _safe_get(secrets, "aws", {})
         cfg = {
             "aws_access_key_id": _norm(
-                aws_secrets.get("aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID"))
+                _safe_get(aws_secrets, "aws_access_key_id")
+                or _safe_get(aws_secrets, "access_key_id")
+                or _safe_get(secrets, "aws_access_key_id")
+                or _safe_get(secrets, "AWS_ACCESS_KEY_ID")
+                or os.environ.get("AWS_ACCESS_KEY_ID")
             ),
             "aws_secret_access_key": _norm(
-                aws_secrets.get("aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY"))
+                _safe_get(aws_secrets, "aws_secret_access_key")
+                or _safe_get(aws_secrets, "secret_access_key")
+                or _safe_get(secrets, "aws_secret_access_key")
+                or _safe_get(secrets, "AWS_SECRET_ACCESS_KEY")
+                or os.environ.get("AWS_SECRET_ACCESS_KEY")
             ),
             "aws_session_token": _norm(
-                aws_secrets.get("aws_session_token", os.environ.get("AWS_SESSION_TOKEN"))
+                _safe_get(aws_secrets, "aws_session_token")
+                or _safe_get(aws_secrets, "session_token")
+                or _safe_get(secrets, "aws_session_token")
+                or _safe_get(secrets, "AWS_SESSION_TOKEN")
+                or os.environ.get("AWS_SESSION_TOKEN")
             ),
-            "region_name": _norm(aws_secrets.get("region", os.environ.get("AWS_REGION", "us-east-1"))),
+            "region_name": _norm(
+                _safe_get(aws_secrets, "region")
+                or _safe_get(aws_secrets, "aws_region")
+                or _safe_get(secrets, "region")
+                or _safe_get(secrets, "aws_region")
+                or _safe_get(secrets, "AWS_REGION")
+                or os.environ.get("AWS_REGION", "us-east-1")
+            ),
         }
         return {k: v for k, v in cfg.items() if v is not None}
     except Exception:
@@ -47,9 +73,11 @@ def _get_aws_config() -> dict:
 def _get_agent_function_name() -> str:
     """Get the agent Lambda function name from st.secrets or env vars."""
     try:
-        return st.secrets.get("app", {}).get(
-            "agent_function_name",
-            os.environ.get("AGENT_FUNCTION_NAME", "agentcore-billing-dev-runtime-invoker"),
+        return (
+            st.secrets.get("app", {}).get("agent_function_name")
+            or st.secrets.get("agent_function_name")
+            or st.secrets.get("AGENT_FUNCTION_NAME")
+            or os.environ.get("AGENT_FUNCTION_NAME", "agentcore-billing-dev-runtime-invoker")
         )
     except Exception:
         return os.environ.get("AGENT_FUNCTION_NAME", "agentcore-billing-dev-runtime-invoker")

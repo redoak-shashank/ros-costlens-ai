@@ -2,7 +2,14 @@
 
 import os
 import streamlit as st
-from utils.data_loader import get_daily_spend, get_mtd_spend, get_forecast, get_spend_by_service
+from utils.data_loader import (
+    get_daily_spend,
+    get_forecast,
+    get_mtd_spend,
+    get_runtime_config_diagnostics,
+    get_spend_by_service,
+    test_aws_credentials,
+)
 from utils.charts import daily_spend_chart, budget_gauge
 
 
@@ -22,9 +29,31 @@ def _get_monthly_budget() -> float:
         return 1000.0
 
 
+def _debug_enabled() -> bool:
+    """Enable diagnostics via app.debug_config in secrets or DASHBOARD_DEBUG env."""
+    try:
+        app_cfg = st.secrets.get("app", {})
+        if app_cfg.get("debug_config", False):
+            return True
+    except Exception:
+        pass
+
+    return os.environ.get("DASHBOARD_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 MONTHLY_BUDGET = _get_monthly_budget()
 
 st.title("Overview")
+
+if _debug_enabled():
+    with st.expander("Deployment diagnostics", expanded=True):
+        st.caption("Safe checks only - no secret values are displayed.")
+        st.json(get_runtime_config_diagnostics())
+        ok, message = test_aws_credentials()
+        if ok:
+            st.success(f"AWS credential check passed: {message}")
+        else:
+            st.error(f"AWS credential check failed: {message}")
 
 # ── Metric cards ─────────────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)

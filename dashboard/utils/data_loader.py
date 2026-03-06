@@ -26,19 +26,45 @@ def _get_aws_config() -> dict:
             return v or None
         return v
 
+    def _safe_get(mapping, key, default=None):
+        try:
+            return mapping.get(key, default)
+        except Exception:
+            return default
+
     try:
-        aws_secrets = st.secrets.get("aws", {})
+        secrets = st.secrets
+        aws_secrets = _safe_get(secrets, "aws", {})
         cfg = {
             "aws_access_key_id": _norm(
-                aws_secrets.get("aws_access_key_id", os.environ.get("AWS_ACCESS_KEY_ID"))
+                _safe_get(aws_secrets, "aws_access_key_id")
+                or _safe_get(aws_secrets, "access_key_id")
+                or _safe_get(secrets, "aws_access_key_id")
+                or _safe_get(secrets, "AWS_ACCESS_KEY_ID")
+                or os.environ.get("AWS_ACCESS_KEY_ID")
             ),
             "aws_secret_access_key": _norm(
-                aws_secrets.get("aws_secret_access_key", os.environ.get("AWS_SECRET_ACCESS_KEY"))
+                _safe_get(aws_secrets, "aws_secret_access_key")
+                or _safe_get(aws_secrets, "secret_access_key")
+                or _safe_get(secrets, "aws_secret_access_key")
+                or _safe_get(secrets, "AWS_SECRET_ACCESS_KEY")
+                or os.environ.get("AWS_SECRET_ACCESS_KEY")
             ),
             "aws_session_token": _norm(
-                aws_secrets.get("aws_session_token", os.environ.get("AWS_SESSION_TOKEN"))
+                _safe_get(aws_secrets, "aws_session_token")
+                or _safe_get(aws_secrets, "session_token")
+                or _safe_get(secrets, "aws_session_token")
+                or _safe_get(secrets, "AWS_SESSION_TOKEN")
+                or os.environ.get("AWS_SESSION_TOKEN")
             ),
-            "region_name": _norm(aws_secrets.get("region", os.environ.get("AWS_REGION", "us-east-1"))),
+            "region_name": _norm(
+                _safe_get(aws_secrets, "region")
+                or _safe_get(aws_secrets, "aws_region")
+                or _safe_get(secrets, "region")
+                or _safe_get(secrets, "aws_region")
+                or _safe_get(secrets, "AWS_REGION")
+                or os.environ.get("AWS_REGION", "us-east-1")
+            ),
         }
         # Drop empty credential fields so boto3 can use default credential chain
         return {k: v for k, v in cfg.items() if v is not None}
@@ -49,7 +75,13 @@ def _get_aws_config() -> dict:
 def _get_app_config(key: str, default: str = "") -> str:
     """Get an app config value from st.secrets[app] or env vars."""
     try:
-        return st.secrets.get("app", {}).get(key, os.environ.get(key.upper(), default))
+        app_cfg = st.secrets.get("app", {})
+        return (
+            app_cfg.get(key)
+            or st.secrets.get(key)
+            or st.secrets.get(key.upper())
+            or os.environ.get(key.upper(), default)
+        )
     except Exception:
         return os.environ.get(key.upper(), default)
 
@@ -64,6 +96,40 @@ def _get_s3_client():
 def _get_ce_client():
     """Get a Cost Explorer client (cached across reruns)."""
     return boto3.client("ce", **_get_aws_config())
+
+
+def get_runtime_config_diagnostics() -> dict:
+    """
+    Return non-sensitive config diagnostics for deployment troubleshooting.
+
+    Intentionally exposes only booleans and non-secret values.
+    """
+    cfg = _get_aws_config()
+    return {
+        "aws_access_key_id_present": bool(cfg.get("aws_access_key_id")),
+        "aws_secret_access_key_present": bool(cfg.get("aws_secret_access_key")),
+        "aws_session_token_present": bool(cfg.get("aws_session_token")),
+        "region_name": cfg.get("region_name", "us-east-1"),
+        "data_bucket_configured": bool(_get_app_config("data_bucket")),
+        "agent_function_name_configured": bool(_get_app_config("agent_function_name")),
+    }
+
+
+def test_aws_credentials() -> tuple[bool, str]:
+    """
+    Validate AWS credentials by calling STS GetCallerIdentity.
+
+    Returns:
+        (True, message) when credentials are valid, else (False, error message).
+    """
+    try:
+        sts = boto3.client("sts", **_get_aws_config())
+        identity = sts.get_caller_identity()
+        account = identity.get("Account", "unknown")
+        arn = identity.get("Arn", "unknown")
+        return True, f"Account={account}, Arn={arn}"
+    except Exception as e:
+        return False, str(e)
 
 
 @st.cache_data(ttl=300)
