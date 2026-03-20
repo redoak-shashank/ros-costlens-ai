@@ -182,7 +182,15 @@ def _format_daily_report(state: BillingState) -> str:
 def _format_anomaly_alert(state: BillingState) -> str:
     """Format an anomaly alert for Slack."""
     anomalies = state.get("anomalies", [])
-    severity = state.get("severity", "medium")
+    severity = state.get("severity", "")
+
+    # When no anomalies: send a friendly all-clear message instead of a scary alert
+    if not anomalies:
+        return (
+            ":white_check_mark: *Cost Anomaly Check — All Clear*\n\n"
+            "No anomalies found in the latest analysis. Your spend looks normal.\n\n"
+            "_Reply in thread to ask questions_ :robot_face:"
+        )
 
     severity_emoji = {
         "critical": ":rotating_light:",
@@ -191,8 +199,9 @@ def _format_anomaly_alert(state: BillingState) -> str:
         "low": ":information_source:",
     }.get(severity, ":warning:")
 
+    severity_label = f" ({severity.upper()})" if severity else ""
     lines = [
-        f"{severity_emoji} *Cost Anomaly Alert* ({severity.upper()})",
+        f"{severity_emoji} *Cost Anomaly Alert*{severity_label}",
         "",
     ]
 

@@ -1,11 +1,11 @@
 ###############################################################################
-# Daily Cost Report — 8 AM UTC
+# Daily Cost Report — 2 PM UTC
 ###############################################################################
 
 resource "aws_cloudwatch_event_rule" "daily_report" {
   name                = "${local.name_prefix}-daily-cost-report"
-  description         = "Trigger daily cost report at 8 AM UTC"
-  schedule_expression = "cron(0 8 * * ? *)"
+  description         = "Trigger daily cost report at 2 PM UTC"
+  schedule_expression = "cron(0 14 * * ? *)"
 
   tags = { Name = "${local.name_prefix}-daily-report" }
 }

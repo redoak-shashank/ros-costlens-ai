@@ -26,7 +26,7 @@ banner_type, banner_text = severity_config.get(severity, ("info", "Anomalies det
 getattr(st, banner_type)(banner_text)
 
 # Timeline chart
-st.plotly_chart(anomaly_timeline(anomalies), use_container_width=True)
+st.plotly_chart(anomaly_timeline(anomalies), width="stretch")
 
 st.divider()
 

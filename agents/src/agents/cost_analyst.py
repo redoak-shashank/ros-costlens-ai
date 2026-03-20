@@ -43,6 +43,17 @@ def _extract_current_question(message: str) -> str:
     return message.strip()
 
 
+def _extract_memory_context_text(message: str) -> str:
+    """Extract injected memory context block from app.py message format."""
+    if not message:
+        return ""
+    prefix = "[Previous context from memory]"
+    marker = "[Current question]"
+    if prefix in message and marker in message:
+        return message.split(prefix, 1)[1].split(marker, 1)[0].strip()
+    return ""
+
+
 def _resolve_cur_table_name() -> str:
     """
     Resolve CUR table name in Athena database.
@@ -141,6 +152,22 @@ def _time_filter_sql(question: str, explicit_date: str | None = None) -> str:
     return "line_item_usage_start_date >= date_add('day', -30, current_date)"
 
 
+def _time_window_label(question: str, explicit_date: str | None = None) -> str:
+    """Human-readable label for the inferred Athena time window."""
+    if explicit_date:
+        return explicit_date
+
+    q = question.lower()
+    if "yesterday" in q:
+        return "yesterday"
+    if "today" in q:
+        return "today"
+    if any(s in q for s in ("last 7 days", "past 7 days", "last week", "past week")):
+        return "last 7 days"
+
+    return "last 30 days"
+
+
 def _looks_like_athena_deep_dive(question: str) -> bool:
     """Heuristic to decide if we should auto-run Athena deep-dive SQL."""
     q = question.lower()
@@ -234,34 +261,54 @@ def _run_athena_deep_dive_if_needed(question: str) -> str | None:
     service_code = _detect_service_code(question)
     top_n = _extract_top_n(question)
     specific_date = _extract_date(question)
+    date_filter = _time_filter_sql(question, specific_date)
+    window_label = _time_window_label(question, specific_date)
     ql = question.lower()
 
-    # Template 1: account/region breakdown (last 30 days)
+    # Template 1: account/region breakdown (optionally include service)
     if "account" in ql and "region" in ql:
+        include_service = "service" in ql
         service_filter = (
             f"AND line_item_product_code = '{service_code}'" if service_code else ""
         )
-        sql = f"""
+        if include_service:
+            sql = f"""
+                SELECT
+                    line_item_usage_account_id AS account_id,
+                    product_region AS region,
+                    line_item_product_code AS service,
+                    ROUND(SUM(line_item_unblended_cost), 2) AS cost
+                FROM {table_name}
+                WHERE {date_filter}
+                  AND line_item_unblended_cost > 0
+                  {service_filter}
+                GROUP BY 1, 2, 3
+                HAVING SUM(line_item_unblended_cost) > 0.005
+                ORDER BY 4 DESC
+                LIMIT {top_n}
+            """
+            title = f"Athena deep-dive: account/region/service cost breakdown ({window_label})"
+        else:
+            sql = f"""
             SELECT
                 line_item_usage_account_id AS account_id,
                 product_region AS region,
                 ROUND(SUM(line_item_unblended_cost), 2) AS cost
             FROM {table_name}
-            WHERE line_item_usage_start_date >= date_add('day', -30, current_date)
+                WHERE {date_filter}
               AND line_item_unblended_cost > 0
               {service_filter}
             GROUP BY 1, 2
+                HAVING SUM(line_item_unblended_cost) > 0.005
             ORDER BY 3 DESC
             LIMIT {top_n}
         """
+        title = f"Athena deep-dive: account/region cost breakdown ({window_label})"
         rows = run_athena_query(query=sql, max_results=top_n)
-        return _format_athena_result(
-            "Athena deep-dive: account/region cost breakdown (last 30 days)", rows
-        )
+        return _format_athena_result(title, rows)
 
     # Template 2: top resources for a specific day (or recent spike day)
     if "resource" in ql or "root cause" in ql:
-        date_filter = _time_filter_sql(question, specific_date)
         service_filter = (
             f"AND line_item_product_code = '{service_code}'" if service_code else ""
         )
@@ -575,8 +622,10 @@ def cost_analyst_node(state: BillingState) -> dict:
 
             # Get the user's question
             user_question = ""
+            memory_context_text = ""
             for msg in reversed(state.get("messages", [])):
                 if isinstance(msg, HumanMessage):
+                    memory_context_text = _extract_memory_context_text(msg.content)
                     user_question = _extract_current_question(msg.content)
                     break
 
@@ -614,11 +663,21 @@ def cost_analyst_node(state: BillingState) -> dict:
                 indent=2,
             )
 
+            memory_section = ""
+            if memory_context_text:
+                memory_section = (
+                    "Session memory context from prior turns:\n"
+                    f"{memory_context_text}\n\n"
+                    "Use this memory context when answering continuity/reference questions "
+                    "(e.g., 'what did I just tell you?').\n\n"
+            )
+
             messages = [
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(
                     content=(
                         f"User question: {user_question}\n\n"
+                        f"{memory_section}"
                         f"Available cost data:\n{context}\n\n"
                         "Analyze this data to answer the user's question. "
                         "If you need more granular data (like per-resource or tag-based), "

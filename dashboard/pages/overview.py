@@ -2,6 +2,7 @@
 
 import os
 import streamlit as st
+from utils.account_context import get_account_value
 from utils.data_loader import (
     get_daily_spend,
     get_forecast,
@@ -15,13 +16,7 @@ from utils.charts import daily_spend_chart, budget_gauge
 
 def _get_monthly_budget() -> float:
     """Read monthly budget from Streamlit secrets first, then env fallback."""
-    try:
-        val = st.secrets.get("app", {}).get(
-            "monthly_budget",
-            os.environ.get("MONTHLY_BUDGET", "1000"),
-        )
-    except Exception:
-        val = os.environ.get("MONTHLY_BUDGET", "1000")
+    val = get_account_value("app", "monthly_budget", os.environ.get("MONTHLY_BUDGET", "1000"))
 
     try:
         return float(val)
@@ -31,12 +26,8 @@ def _get_monthly_budget() -> float:
 
 def _debug_enabled() -> bool:
     """Enable diagnostics via app.debug_config in secrets or DASHBOARD_DEBUG env."""
-    try:
-        app_cfg = st.secrets.get("app", {})
-        if app_cfg.get("debug_config", False):
-            return True
-    except Exception:
-        pass
+    if bool(get_account_value("app", "debug_config", False)):
+        return True
 
     return os.environ.get("DASHBOARD_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -85,10 +76,10 @@ st.divider()
 left, right = st.columns([2, 1])
 
 with left:
-    st.plotly_chart(daily_spend_chart(trend), use_container_width=True)
+    st.plotly_chart(daily_spend_chart(trend), width="stretch")
 
 with right:
-    st.plotly_chart(budget_gauge(mtd, MONTHLY_BUDGET), use_container_width=True)
+    st.plotly_chart(budget_gauge(mtd, MONTHLY_BUDGET), width="stretch")
 
 # ── Top services summary ────────────────────────────────────────────
 st.subheader("Top Services (Last 30 Days)")

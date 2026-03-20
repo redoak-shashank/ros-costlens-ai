@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 import boto3
 import streamlit as st
 
+from .account_context import get_account_config, get_account_value, get_selected_account, get_selected_profile
+
 
 def _get_aws_config() -> dict:
     """Get AWS credentials and region from st.secrets or env vars."""
@@ -34,7 +36,8 @@ def _get_aws_config() -> dict:
 
     try:
         secrets = st.secrets
-        aws_secrets = _safe_get(secrets, "aws", {})
+        aws_secrets = get_account_config("aws")
+        profile_name = get_selected_profile()
         cfg = {
             "aws_access_key_id": _norm(
                 _safe_get(aws_secrets, "aws_access_key_id")
@@ -66,6 +69,8 @@ def _get_aws_config() -> dict:
                 or os.environ.get("AWS_REGION", "us-east-1")
             ),
         }
+        if profile_name:
+            cfg["profile_name"] = profile_name
         # Drop empty credential fields so boto3 can use default credential chain
         return {k: v for k, v in cfg.items() if v is not None}
     except Exception:
@@ -75,7 +80,7 @@ def _get_aws_config() -> dict:
 def _get_app_config(key: str, default: str = "") -> str:
     """Get an app config value from st.secrets[app] or env vars."""
     try:
-        app_cfg = st.secrets.get("app", {})
+        app_cfg = get_account_config("app")
         return (
             app_cfg.get(key)
             or st.secrets.get(key)
@@ -86,16 +91,32 @@ def _get_app_config(key: str, default: str = "") -> str:
         return os.environ.get(key.upper(), default)
 
 
+def _make_boto3_client(service_name: str):
+    """Create boto3 client honoring selected profile and explicit credentials."""
+    cfg = dict(_get_aws_config())
+    profile_name = cfg.pop("profile_name", None)
+
+    has_explicit_creds = bool(
+        cfg.get("aws_access_key_id") and cfg.get("aws_secret_access_key")
+    )
+    if profile_name and not has_explicit_creds:
+        session = boto3.session.Session(profile_name=profile_name)
+        return session.client(service_name, **cfg)
+    return boto3.client(service_name, **cfg)
+
+
 @st.cache_resource
-def _get_s3_client():
+def _get_s3_client(account_key: str):
     """Get an S3 client (cached across reruns)."""
-    return boto3.client("s3", **_get_aws_config())
+    del account_key
+    return _make_boto3_client("s3")
 
 
 @st.cache_resource
-def _get_ce_client():
+def _get_ce_client(account_key: str):
     """Get a Cost Explorer client (cached across reruns)."""
-    return boto3.client("ce", **_get_aws_config())
+    del account_key
+    return _make_boto3_client("ce")
 
 
 def get_runtime_config_diagnostics() -> dict:
@@ -106,6 +127,8 @@ def get_runtime_config_diagnostics() -> dict:
     """
     cfg = _get_aws_config()
     return {
+        "selected_account": get_selected_account(),
+        "selected_profile": get_selected_profile(),
         "aws_access_key_id_present": bool(cfg.get("aws_access_key_id")),
         "aws_secret_access_key_present": bool(cfg.get("aws_secret_access_key")),
         "aws_session_token_present": bool(cfg.get("aws_session_token")),
@@ -123,7 +146,7 @@ def test_aws_credentials() -> tuple[bool, str]:
         (True, message) when credentials are valid, else (False, error message).
     """
     try:
-        sts = boto3.client("sts", **_get_aws_config())
+        sts = _make_boto3_client("sts")
         identity = sts.get_caller_identity()
         account = identity.get("Account", "unknown")
         arn = identity.get("Arn", "unknown")
@@ -139,7 +162,7 @@ def load_dashboard_data() -> dict:
     if not bucket:
         return {}
 
-    s3 = _get_s3_client()
+    s3 = _get_s3_client(get_selected_account())
 
     try:
         response = s3.get_object(Bucket=bucket, Key="dashboard/latest.json")
@@ -151,7 +174,7 @@ def load_dashboard_data() -> dict:
 @st.cache_data(ttl=300)
 def get_daily_spend(days: int = 30) -> list[dict]:
     """Fetch daily spend from Cost Explorer."""
-    ce = _get_ce_client()
+    ce = _get_ce_client(get_selected_account())
     end_date = datetime.utcnow().date()
     start_date = end_date - timedelta(days=days)
 
@@ -180,7 +203,7 @@ def get_daily_spend(days: int = 30) -> list[dict]:
 @st.cache_data(ttl=300)
 def get_spend_by_service(days: int = 30) -> dict[str, float]:
     """Fetch spend by service from Cost Explorer."""
-    ce = _get_ce_client()
+    ce = _get_ce_client(get_selected_account())
     end_date = datetime.utcnow().date()
     start_date = end_date - timedelta(days=days)
 
@@ -210,7 +233,7 @@ def get_spend_by_service(days: int = 30) -> dict[str, float]:
 @st.cache_data(ttl=300)
 def get_mtd_spend() -> float:
     """Get month-to-date spend."""
-    ce = _get_ce_client()
+    ce = _get_ce_client(get_selected_account())
     today = datetime.utcnow().date()
     first_of_month = today.replace(day=1)
 
@@ -234,7 +257,7 @@ def get_mtd_spend() -> float:
 @st.cache_data(ttl=3600)
 def get_forecast() -> float:
     """Get end-of-month cost forecast."""
-    ce = _get_ce_client()
+    ce = _get_ce_client(get_selected_account())
     today = datetime.utcnow().date()
 
     import calendar

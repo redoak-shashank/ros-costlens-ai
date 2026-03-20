@@ -222,19 +222,32 @@ def handler(event: dict, context=None) -> dict:
                 slack_event = body.get("event", {})
                 event_type = slack_event.get("type", "")
 
-                # Skip message events that contain a bot mention — the
-                # app_mention event will also fire and we handle it there.
-                # This prevents duplicate replies.
-                if event_type == "message" and "<@" in slack_event.get("text", ""):
-                    logger.info("Skipping message event with bot mention (handled by app_mention)")
-                    print("[src.app] Skipping message event (app_mention will handle it)", flush=True)
-                    return {"statusCode": 200, "body": "ok"}
+                # Channel behavior: respond only to @mentions (app_mention).
+                # DM behavior: respond to direct messages.
+                # Thread follow-up behavior: in channels/groups, allow non-mention
+                # replies only if the bot has already replied in that thread.
+                channel = slack_event.get("channel", "")
+                thread_ts = slack_event.get("thread_ts", slack_event.get("ts", ""))
+                is_dm_message = (
+                    event_type == "message"
+                    and slack_event.get("channel_type") == "im"
+                    and not slack_event.get("bot_id")
+                )
+                is_app_mention = event_type == "app_mention" and not slack_event.get("bot_id")
+                is_thread_followup = (
+                    event_type == "message"
+                    and slack_event.get("channel_type") in {"channel", "group"}
+                    and not slack_event.get("bot_id")
+                    and bool(slack_event.get("thread_ts"))
+                )
+                allow_thread_followup = False
+                if is_thread_followup:
+                    from .tools.slack import thread_has_bot_reply
 
-                # Handle app_mention events and DM messages (no bot mention)
-                if event_type in ("message", "app_mention") and not slack_event.get("bot_id"):
+                    allow_thread_followup = thread_has_bot_reply(channel=channel, thread_ts=thread_ts)
+
+                if is_dm_message or is_app_mention or allow_thread_followup:
                     user_text = slack_event.get("text", "")
-                    channel = slack_event.get("channel", "")
-                    thread_ts = slack_event.get("thread_ts", slack_event.get("ts", ""))
 
                     # Strip bot mention from text (e.g., "<@U12345> Hi" → "Hi")
                     import re

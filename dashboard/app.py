@@ -6,12 +6,31 @@ and interacting with the billing intelligence agents via chat.
 """
 
 import streamlit as st
+from utils.account_context import ACCOUNT_SESSION_KEY, get_available_accounts, get_selected_account
 
 st.set_page_config(
     page_title="AWS Billing Intelligence",
     page_icon=":chart_with_upwards_trend:",
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+
+def _switch_account():
+    """Clear Streamlit caches when account selection changes."""
+    st.cache_data.clear()
+    st.cache_resource.clear()
+
+
+accounts = get_available_accounts()
+current = get_selected_account()
+default_index = accounts.index(current) if current in accounts else 0
+st.sidebar.selectbox(
+    "Account",
+    options=accounts,
+    index=default_index,
+    key=ACCOUNT_SESSION_KEY,
+    on_change=_switch_account,
 )
 
 # Define pages

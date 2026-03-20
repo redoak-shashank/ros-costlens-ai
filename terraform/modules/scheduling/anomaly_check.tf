@@ -1,11 +1,11 @@
 ###############################################################################
-# Anomaly Check — Every 4 Hours
+# Anomaly Check — 3 Times Daily (starting 1 PM UTC, every 8 hours)
 ###############################################################################
 
 resource "aws_cloudwatch_event_rule" "anomaly_check" {
   name                = "${local.name_prefix}-anomaly-check"
-  description         = "Check for cost anomalies every 4 hours"
-  schedule_expression = "rate(4 hours)"
+  description         = "Check for cost anomalies three times per day"
+  schedule_expression = "cron(0 13,21 * * ? *)"
 
   tags = { Name = "${local.name_prefix}-anomaly-check" }
 }

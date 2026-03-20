@@ -1,19 +1,15 @@
 ###############################################################################
 # Terraform State
 #
-# Using local state for initial development. Migrate to S3 backend when
-# the project is ready for team collaboration / CI-CD.
+# Backend values are supplied at init time via:
+#   terraform init -backend-config=<file>
 #
-# To migrate later, uncomment the s3 block below and run:
-#   terraform init -migrate-state
+# This makes account switching easy without editing this file.
+# Use backend config files like:
+# - backend.default.hcl
+# - backend.saf.hcl
 ###############################################################################
 
-# terraform {
-#   backend "s3" {
-#     bucket         = "agentcore-billing-tfstate"
-#     key            = "terraform.tfstate"
-#     region         = "us-east-1"
-#     encrypt        = true
-#     dynamodb_table = "agentcore-billing-tflock"
-#   }
-# }
+terraform {
+  backend "s3" {}
+}

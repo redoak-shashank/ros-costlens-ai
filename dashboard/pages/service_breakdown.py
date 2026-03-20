@@ -24,10 +24,10 @@ st.metric("Total Spend", f"${total:,.2f}", help=f"Sum of all services over the l
 st.divider()
 
 # Treemap
-st.plotly_chart(service_treemap(services), use_container_width=True)
+st.plotly_chart(service_treemap(services), width="stretch")
 
 # Bar chart
-st.plotly_chart(service_bar_chart(services, top_n=15), use_container_width=True)
+st.plotly_chart(service_bar_chart(services, top_n=15), width="stretch")
 
 # Detail table
 st.subheader("All Services")
@@ -36,4 +36,4 @@ df = pd.DataFrame([
     for svc, cost in services.items()
 ])
 df["Cost"] = df["Cost"].map(lambda x: f"${x:,.2f}")
-st.dataframe(df, use_container_width=True, hide_index=True)
+st.dataframe(df, width="stretch", hide_index=True)

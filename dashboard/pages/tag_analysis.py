@@ -44,7 +44,7 @@ if not tag_data:
         title="Spend by Team and Service (Example Data)",
         labels={"Cost": "Cost (USD)"},
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     st.stop()
 
 # ── Real tag data visualization ──────────────────────────────────────
@@ -60,7 +60,7 @@ if "team" in df.columns:
         title="Total Spend by Team",
         labels={"x": "Team", "y": "Cost (USD)"},
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # Project breakdown
 if "project" in df.columns:
@@ -71,7 +71,7 @@ if "project" in df.columns:
         title="Top Projects by Spend",
         labels={"x": "Project", "y": "Cost (USD)"},
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # Environment breakdown
 if "environment" in df.columns:
@@ -81,8 +81,8 @@ if "environment" in df.columns:
         names=env_spend.index, values=env_spend.values,
         title="Spend Distribution by Environment",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # Detail table
 st.subheader("Detailed Tag Breakdown")
-st.dataframe(df, use_container_width=True, hide_index=True)
+st.dataframe(df, width="stretch", hide_index=True)

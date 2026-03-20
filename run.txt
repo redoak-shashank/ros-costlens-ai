@@ -1,5 +1,22 @@
 set -euo pipefail
 
+# AWS account/profile selector (single place to switch accounts)
+# Usage:
+#   AWS_PROFILE_NAME=saf bash run.txt
+# or edit the default below.
+AWS_PROFILE_NAME="${AWS_PROFILE_NAME:-default}"
+export AWS_PROFILE="$AWS_PROFILE_NAME"
+echo "Using AWS_PROFILE=$AWS_PROFILE"
+AWS_REGION="${AWS_REGION:-us-east-1}"
+export AWS_REGION
+echo "Using AWS_REGION=$AWS_REGION"
+
+# Terraform backend + vars selectors (single place to switch environments)
+TF_BACKEND_CONFIG="${TF_BACKEND_CONFIG:-backend.default.hcl}"
+TF_VARS_FILE="${TF_VARS_FILE:-terraform.tfvars}"
+echo "Using TF_BACKEND_CONFIG=$TF_BACKEND_CONFIG"
+echo "Using TF_VARS_FILE=$TF_VARS_FILE"
+
 # Stabilize Terraform provider/plugin temp files on macOS
 export TMPDIR=/tmp/tf-tmp
 mkdir -p "$TMPDIR"
@@ -16,18 +33,98 @@ echo "Artifact details:"
 ls -lh /tmp/billing-agents.zip
 shasum -a 256 /tmp/billing-agents.zip
 
+cd /Users/shashank/Desktop/agentcore-billing/terraform
+echo "Terraform init (backend reconfigure)..."
+TMPDIR="$TMPDIR" terraform init -reconfigure -backend-config="$TF_BACKEND_CONFIG" > /tmp/tf_init.log 2>&1
+tail -5 /tmp/tf_init.log
+
+AGENT_CODE_BUCKET="$(terraform output -raw agent_code_bucket 2>/dev/null || true)"
+if [ -z "$AGENT_CODE_BUCKET" ]; then
+  ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+  AGENT_CODE_BUCKET="agentcore-billing-saf-dev-agent-code-${ACCOUNT_ID}"
+fi
+echo "Uploading artifact to s3://$AGENT_CODE_BUCKET/agent-code/billing-agents.zip"
 aws s3 cp /tmp/billing-agents.zip \
-  s3://agentcore-billing-dev-agent-code-088130860316/agent-code/billing-agents.zip \
-  --region us-east-1 2>&1 | tail -1
+  "s3://$AGENT_CODE_BUCKET/agent-code/billing-agents.zip" \
+  --region "$AWS_REGION" 2>&1 | tail -1
 
 cp /tmp/billing-agents.zip /Users/shashank/Desktop/agentcore-billing/terraform/modules/agentcore/placeholder.zip
 
-cd /Users/shashank/Desktop/agentcore-billing/terraform
-if [ ! -d ".terraform/providers" ] || [ ! -f ".terraform.lock.hcl" ]; then
-  echo "Terraform init (guard)..."
-  TMPDIR="$TMPDIR" terraform init -upgrade > /tmp/tf_init.log 2>&1
-  tail -5 /tmp/tf_init.log
-fi
 terraform taint 'module.agentcore.aws_bedrockagentcore_agent_runtime.billing'
 terraform taint 'module.agentcore.aws_bedrockagentcore_agent_runtime_endpoint.billing'
-TMPDIR="$TMPDIR" terraform apply -auto-approve 2>&1 | tail -3
+TMPDIR="$TMPDIR" terraform apply -var-file="$TF_VARS_FILE" -auto-approve 2>&1 | tail -3
+
+# Ensure the runtime endpoint serves the latest runtime version so
+# scheduled EventBridge invocations always use newest env/code.
+RUNTIME_ID="$(terraform output -raw agentcore_runtime_id)"
+ENDPOINT_NAME="$(
+  terraform state show -no-color module.agentcore.aws_bedrockagentcore_agent_runtime_endpoint.billing \
+    | awk -F' = ' '/^    name = / {gsub(/"/, "", $2); print $2; exit}'
+)"
+if TARGET_VERSION="$(
+  aws bedrock-agentcore-control get-agent-runtime \
+    --agent-runtime-id "$RUNTIME_ID" \
+    --query 'agentRuntimeVersion' \
+    --output text 2>/tmp/agentcore_get_runtime.err
+)"; then
+  if LIVE_VERSION="$(
+    aws bedrock-agentcore-control get-agent-runtime-endpoint \
+      --agent-runtime-id "$RUNTIME_ID" \
+      --endpoint-name "$ENDPOINT_NAME" \
+      --query 'liveVersion' \
+      --output text 2>/tmp/agentcore_get_endpoint.err
+  )"; then
+    if [ "$LIVE_VERSION" != "$TARGET_VERSION" ]; then
+      echo "Promoting endpoint $ENDPOINT_NAME from version $LIVE_VERSION to $TARGET_VERSION"
+      if aws bedrock-agentcore-control update-agent-runtime-endpoint \
+        --agent-runtime-id "$RUNTIME_ID" \
+        --endpoint-name "$ENDPOINT_NAME" \
+        --agent-runtime-version "$TARGET_VERSION" >/dev/null 2>/tmp/agentcore_update_endpoint.err; then
+
+        for _ in $(seq 1 30); do
+          if ! STATUS="$(
+            aws bedrock-agentcore-control get-agent-runtime-endpoint \
+              --agent-runtime-id "$RUNTIME_ID" \
+              --endpoint-name "$ENDPOINT_NAME" \
+              --query 'status' \
+              --output text 2>/tmp/agentcore_poll_status.err
+          )"; then
+            echo "Warning: unable to poll endpoint status. Skipping wait."
+            cat /tmp/agentcore_poll_status.err
+            break
+          fi
+
+          if ! LIVE_VERSION="$(
+            aws bedrock-agentcore-control get-agent-runtime-endpoint \
+              --agent-runtime-id "$RUNTIME_ID" \
+              --endpoint-name "$ENDPOINT_NAME" \
+              --query 'liveVersion' \
+              --output text 2>/tmp/agentcore_poll_live.err
+          )"; then
+            echo "Warning: unable to poll endpoint live version. Skipping wait."
+            cat /tmp/agentcore_poll_live.err
+            break
+          fi
+
+          if [ "$STATUS" = "READY" ] && [ "$LIVE_VERSION" = "$TARGET_VERSION" ]; then
+            break
+          fi
+          sleep 3
+        done
+      else
+        echo "Warning: could not update runtime endpoint version. Deployment completed, but endpoint promotion was skipped."
+        cat /tmp/agentcore_update_endpoint.err
+      fi
+    fi
+
+    echo "Endpoint $ENDPOINT_NAME target runtime version: $TARGET_VERSION"
+    echo "Endpoint $ENDPOINT_NAME live runtime version: $LIVE_VERSION"
+  else
+    echo "Warning: unable to read endpoint live version. Deployment completed, but endpoint verification was skipped."
+    cat /tmp/agentcore_get_endpoint.err
+    echo "Runtime target version is: $TARGET_VERSION"
+  fi
+else
+  echo "Warning: unable to read runtime version from AgentCore control plane. Deployment completed, but endpoint verification was skipped."
+  cat /tmp/agentcore_get_runtime.err
+fi

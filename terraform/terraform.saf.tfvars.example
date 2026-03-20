@@ -1,0 +1,25 @@
+###############################################################################
+# SAF AWS Account Configuration (no code changes required)
+# Copy to: terraform.saf.tfvars (do not commit the real file)
+###############################################################################
+
+# Deployment phase: 1 = full system, 2 = + monitoring
+deploy_phase = 1
+
+aws_region   = "us-east-1"
+project_name = "agentcore-billing"
+environment  = "saf-dev"
+
+# Budget
+monthly_budget      = 1000
+alert_threshold_pct = 80
+
+# Slack (left as-is by request; keep empty now if not wiring immediately)
+slack_channel_id = ""
+
+# CUR
+cur_s3_prefix        = "cur-reports"
+cur_retention_months = 13
+
+# Bedrock
+bedrock_model_id = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"

@@ -14,6 +14,8 @@ import os
 import boto3
 import streamlit as st
 
+from .account_context import get_account_config, get_account_value, get_selected_profile
+
 
 def _get_aws_config() -> dict:
     """Get AWS credentials and region from st.secrets or env vars."""
@@ -33,7 +35,8 @@ def _get_aws_config() -> dict:
 
     try:
         secrets = st.secrets
-        aws_secrets = _safe_get(secrets, "aws", {})
+        aws_secrets = get_account_config("aws")
+        profile_name = get_selected_profile()
         cfg = {
             "aws_access_key_id": _norm(
                 _safe_get(aws_secrets, "aws_access_key_id")
@@ -65,16 +68,30 @@ def _get_aws_config() -> dict:
                 or os.environ.get("AWS_REGION", "us-east-1")
             ),
         }
+        if profile_name:
+            cfg["profile_name"] = profile_name
         return {k: v for k, v in cfg.items() if v is not None}
     except Exception:
         return {"region_name": os.environ.get("AWS_REGION", "us-east-1")}
+
+
+def _make_lambda_client():
+    cfg = dict(_get_aws_config())
+    profile_name = cfg.pop("profile_name", None)
+    has_explicit_creds = bool(
+        cfg.get("aws_access_key_id") and cfg.get("aws_secret_access_key")
+    )
+    if profile_name and not has_explicit_creds:
+        session = boto3.session.Session(profile_name=profile_name)
+        return session.client("lambda", **cfg)
+    return boto3.client("lambda", **cfg)
 
 
 def _get_agent_function_name() -> str:
     """Get the agent Lambda function name from st.secrets or env vars."""
     try:
         return (
-            st.secrets.get("app", {}).get("agent_function_name")
+            get_account_value("app", "agent_function_name")
             or st.secrets.get("agent_function_name")
             or st.secrets.get("AGENT_FUNCTION_NAME")
             or os.environ.get("AGENT_FUNCTION_NAME", "agentcore-billing-dev-runtime-invoker")
@@ -94,7 +111,7 @@ def ask_billing_question(question: str, thread_id: str = "dashboard") -> str:
     Returns:
         Agent's text response.
     """
-    client = boto3.client("lambda", **_get_aws_config())
+    client = _make_lambda_client()
 
     payload = {
         "action": "slack_message",

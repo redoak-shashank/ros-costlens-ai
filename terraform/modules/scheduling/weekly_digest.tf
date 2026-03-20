@@ -1,11 +1,11 @@
 ###############################################################################
-# Weekly Deep Dive — Sundays at 9 AM UTC
+# Weekly Deep Dive — Sundays at 2 PM UTC
 ###############################################################################
 
 resource "aws_cloudwatch_event_rule" "weekly_digest" {
   name                = "${local.name_prefix}-weekly-digest"
   description         = "Weekly deep-dive cost report on Sundays"
-  schedule_expression = "cron(0 9 ? * SUN *)"
+  schedule_expression = "cron(0 14 ? * SUN *)"
 
   tags = { Name = "${local.name_prefix}-weekly-digest" }
 }
