@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import urllib.parse
 
 import boto3
 from botocore.exceptions import ClientError
@@ -272,3 +273,124 @@ def update_slack_message(
     except urllib.error.URLError as e:
         logger.error(f"Failed to update Slack message: {e}")
         return {"ok": False, "error": str(e)}
+
+
+def _slack_api_form_post(
+    method: str,
+    token: str,
+    payload: dict[str, str],
+) -> dict:
+    """POST application/x-www-form-urlencoded payload to a Slack API method."""
+    import urllib.request
+    import urllib.error
+
+    body = urllib.parse.urlencode(payload).encode("utf-8")
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": f"Bearer {token}",
+    }
+
+    try:
+        req = urllib.request.Request(
+            f"https://slack.com/api/{method}",
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        logger.error(f"Slack API call failed ({method}): {e}")
+        return {"ok": False, "error": str(e)}
+
+
+def send_slack_file(
+    channel: str,
+    filename: str,
+    file_bytes: bytes,
+    title: str | None = None,
+    thread_ts: str | None = None,
+    initial_comment: str | None = None,
+) -> dict:
+    """
+    Upload a file to Slack using external upload APIs and share it to a channel.
+
+    Requires Slack app scope: files:write.
+    """
+    import urllib.request
+    import urllib.error
+
+    token = _get_slack_token()
+    if not token:
+        logger.warning("No Slack token available — skipping file upload")
+        return {"ok": False, "error": "no_token"}
+
+    if not channel:
+        return {"ok": False, "error": "missing_channel"}
+
+    if not file_bytes:
+        return {"ok": False, "error": "empty_file"}
+
+    # Step 1: Request upload URL + file ID.
+    start_payload = {
+        "filename": filename,
+        "length": str(len(file_bytes)),
+    }
+    start = _slack_api_form_post("files.getUploadURLExternal", token, start_payload)
+    if not start.get("ok"):
+        logger.error(f"Slack file upload start failed: {start}")
+        return start
+
+    upload_url = start.get("upload_url")
+    file_id = start.get("file_id")
+    if not upload_url or not file_id:
+        return {"ok": False, "error": "missing_upload_url_or_file_id", "response": start}
+
+    # Step 2: Upload bytes directly to Slack's upload URL.
+    try:
+        upload_req = urllib.request.Request(
+            upload_url,
+            data=file_bytes,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(len(file_bytes)),
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(upload_req, timeout=30) as upload_response:
+            status = getattr(upload_response, "status", 200)
+            if status < 200 or status >= 300:
+                return {"ok": False, "error": f"upload_http_{status}"}
+    except urllib.error.URLError as e:
+        logger.error(f"Slack raw upload failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+    # Step 3: Complete upload and share to channel (optionally thread).
+    file_title = title or filename
+    files_arg = json.dumps([{"id": file_id, "title": file_title}])
+    complete_payload = {
+        "files": files_arg,
+        "channel_id": channel,
+    }
+    if thread_ts:
+        complete_payload["thread_ts"] = thread_ts
+    if initial_comment:
+        complete_payload["initial_comment"] = _to_slack_mrkdwn(initial_comment)
+
+    complete = _slack_api_form_post("files.completeUploadExternal", token, complete_payload)
+
+    # Compatibility fallback for orgs expecting "channels" instead of "channel_id".
+    if (
+        not complete.get("ok")
+        and complete.get("error") in {"invalid_arguments", "invalid_arg_name", "missing_scope"}
+    ):
+        alt_payload = dict(complete_payload)
+        alt_payload.pop("channel_id", None)
+        alt_payload["channels"] = channel
+        complete = _slack_api_form_post("files.completeUploadExternal", token, alt_payload)
+
+    if not complete.get("ok"):
+        logger.error(f"Slack file upload complete failed: {complete}")
+    else:
+        logger.info(f"Slack file uploaded: {filename} to {channel}")
+    return complete

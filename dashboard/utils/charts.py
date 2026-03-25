@@ -161,3 +161,178 @@ def anomaly_timeline(anomalies: list[dict], height: int = 300) -> go.Figure:
         yaxis_title="Change (%)",
     )
     return fig
+
+
+def rolling_weekday_range_chart(
+    trend_data: list[dict],
+    history_days: int = 56,
+    height: int = 420,
+) -> go.Figure:
+    """
+    Create a simple weekday range chart with current-week overlay.
+
+    - Gray whiskers: min/max daily spend by weekday over the history window.
+    - Green dots: latest observed spend for each weekday.
+    - Dark green dot: most recent available day (no extra legend item).
+    """
+    if not trend_data:
+        return go.Figure().update_layout(title="No data available")
+
+    df = pd.DataFrame(trend_data)
+    if "date" not in df.columns or "cost" not in df.columns:
+        return go.Figure().update_layout(title="Invalid trend data")
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["cost"] = pd.to_numeric(df["cost"], errors="coerce")
+    df = df.dropna(subset=["date", "cost"]).sort_values("date")
+    if df.empty:
+        return go.Figure().update_layout(title="No data available")
+
+    df = df.tail(history_days).copy()
+
+    dow_order = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ]
+
+    df["weekday"] = df["date"].dt.day_name()
+    range_df = (
+        df.groupby("weekday", as_index=False)["cost"]
+        .agg(low="min", high="max")
+    )
+    range_df["weekday"] = pd.Categorical(range_df["weekday"], categories=dow_order, ordered=True)
+    range_df = range_df.sort_values("weekday")
+
+    # Latest observed value for each weekday (closest date to now per weekday).
+    latest_per_weekday = (
+        df.sort_values("date")
+        .groupby("weekday", as_index=False)
+        .tail(1)
+        .copy()
+    )
+    latest_per_weekday["weekday"] = pd.Categorical(
+        latest_per_weekday["weekday"], categories=dow_order, ordered=True
+    )
+    latest_per_weekday = latest_per_weekday.sort_values("weekday")
+
+    latest_row = df.sort_values("date").tail(1).copy()
+    latest_row["weekday"] = latest_row["date"].dt.day_name()
+    latest_row["weekday"] = pd.Categorical(
+        latest_row["weekday"], categories=dow_order, ordered=True
+    )
+
+    fig = go.Figure()
+
+    # Build whiskers as one trace so spacing/hover stay consistent.
+    wx: list[str | None] = []
+    wy: list[float | None] = []
+    for _, row in range_df.iterrows():
+        wx.extend([row["weekday"], row["weekday"], None])
+        wy.extend([float(row["low"]), float(row["high"]), None])
+
+    fig.add_trace(go.Scatter(
+        x=wx,
+        y=wy,
+        mode="lines",
+        line=dict(color="rgba(75, 85, 99, 0.75)", width=5),
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    if not latest_per_weekday.empty:
+        fig.add_trace(go.Scatter(
+            x=latest_per_weekday["weekday"],
+            y=latest_per_weekday["cost"],
+            mode="markers",
+            marker=dict(color="#16a34a", size=11),
+            name="Latest by weekday",
+            hovertemplate=(
+                "%{x}<br>"
+                "Spend: $%{y:,.2f}<extra>Latest by weekday</extra>"
+            ),
+        ))
+
+    if not latest_row.empty:
+        fig.add_trace(go.Scatter(
+            x=latest_row["weekday"],
+            y=latest_row["cost"],
+            mode="markers",
+            marker=dict(color="#f59e0b", size=11, line=dict(color="#b45309", width=1)),
+            name="Latest",
+            hovertemplate=(
+                "%{x}<br>"
+                "Spend: $%{y:,.2f}<extra>Most recent day</extra>"
+            ),
+            showlegend=True,
+        ))
+
+    y_candidates = []
+    if not range_df.empty:
+        y_candidates.extend(range_df["low"].tolist())
+        y_candidates.extend(range_df["high"].tolist())
+    if not latest_per_weekday.empty:
+        y_candidates.extend(latest_per_weekday["cost"].tolist())
+
+    if y_candidates:
+        y_min = min(y_candidates)
+        y_max = max(y_candidates)
+        span = y_max - y_min
+        pad = (span * 0.2) if span > 0 else max(1.0, y_max * 0.1)
+        y_lower = max(0.0, y_min - pad)
+        y_upper = y_max + pad
+    else:
+        y_lower = 0.0
+        y_upper = 10.0
+
+    def _nice_dollar_step(value_span: float) -> float:
+        if value_span <= 2:
+            return 0.25
+        if value_span <= 5:
+            return 0.5
+        if value_span <= 15:
+            return 1.0
+        if value_span <= 40:
+            return 2.0
+        if value_span <= 100:
+            return 5.0
+        return 10.0
+
+    y_step = _nice_dollar_step(max(y_upper - y_lower, 0.01))
+
+    fig.update_layout(
+        title="Weekday Spend Range (Rolling History)",
+        title_x=0.0,
+        title_xanchor="left",
+        height=height,
+        margin=dict(l=20, r=20, t=78, b=28),
+        xaxis=dict(
+            title="Day of Week",
+            categoryorder="array",
+            categoryarray=dow_order,
+            tickmode="array",
+            tickvals=dow_order,
+            ticktext=dow_order,
+        ),
+        yaxis=dict(
+            title="Spend (USD)",
+            tickprefix="$",
+            tickformat=",.2f",
+            range=[y_lower, y_upper],
+            dtick=y_step,
+            automargin=True,
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.03,
+            xanchor="left",
+            x=0.0,
+        ),
+        hovermode="closest",
+    )
+    return fig

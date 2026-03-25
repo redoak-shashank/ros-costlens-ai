@@ -217,6 +217,45 @@ class TestReporterNode:
         mock_s3.assert_called_once()
 
     @patch("src.agents.reporter._persist_dashboard_data")
+    @patch("src.agents.reporter._build_weekday_spend_chart_png")
+    @patch("src.agents.reporter.send_slack_file")
+    @patch("src.agents.reporter.send_slack_message")
+    def test_reporter_node_uploads_chart_for_report(
+        self,
+        mock_slack_message,
+        mock_slack_file,
+        mock_chart_png,
+        mock_s3,
+    ):
+        """Scheduled daily reports should upload weekday spend chart image to Slack."""
+        from src.agents.reporter import reporter_node
+
+        mock_slack_message.return_value = {"ok": True, "ts": "1710000000.000100"}
+        mock_chart_png.return_value = b"fake_png_bytes"
+        mock_slack_file.return_value = {"ok": True, "file": {"id": "F123"}}
+        mock_s3.return_value = True
+
+        state = {
+            "request_type": "report",
+            "daily_spend": {"total": 1200.00, "services": {"EC2": 800}},
+            "mtd_spend": {"total": 6000.00},
+            "forecast": {"forecast_total": 15000},
+            "trend_data": [{"date": "2026-03-19", "cost": 1200.00}],
+            "anomalies": [],
+            "recommendations": [],
+            "service_breakdown": {},
+            "messages": [],
+        }
+
+        reporter_node(state)
+
+        mock_slack_message.assert_called_once()
+        mock_chart_png.assert_called_once()
+        mock_slack_file.assert_called_once()
+        kwargs = mock_slack_file.call_args.kwargs
+        assert kwargs["thread_ts"] == "1710000000.000100"
+
+    @patch("src.agents.reporter._persist_dashboard_data")
     @patch("src.agents.reporter.send_slack_message")
     def test_reporter_node_interactive_query(self, mock_slack, mock_s3):
         """Should format interactive response without persisting to S3."""
